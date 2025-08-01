@@ -14,7 +14,49 @@ if sys.platform == 'win32':
     sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer)
     sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer)
 
-def upload_file_to_cos(file_path, cos_key, bucket, region, secret_id, secret_key):
+def delete_files_with_prefix(client, bucket, prefix, file_prefix):
+    """
+    Delete files with specific prefix in COS bucket
+    
+    Args:
+        client: COS client instance
+        bucket: COS bucket name
+        prefix: Directory prefix (e.g., 'latest/')
+        file_prefix: File name prefix to delete (e.g., 'me')
+    """
+    try:
+        # List objects with prefix
+        response = client.list_objects(
+            Bucket=bucket,
+            Prefix=prefix
+        )
+        
+        if 'Contents' in response:
+            files_to_delete = []
+            for obj in response['Contents']:
+                file_name = os.path.basename(obj['Key'])
+                if file_name.startswith(file_prefix):
+                    files_to_delete.append({'Key': obj['Key']})
+            
+            if files_to_delete:
+                print(f"Deleting {len(files_to_delete)} files with prefix '{file_prefix}' from {prefix}")
+                delete_response = client.delete_objects(
+                    Bucket=bucket,
+                    Delete={
+                        'Objects': files_to_delete,
+                        'Quiet': True
+                    }
+                )
+                print(f"Successfully deleted {len(files_to_delete)} files")
+            else:
+                print(f"No files found with prefix '{file_prefix}' in {prefix}")
+        else:
+            print(f"No files found in {prefix}")
+            
+    except Exception as e:
+        print(f"Error deleting files: {e}")
+        
+def upload_file_to_cos(file_path, cos_key, bucket, region, secret_id, secret_key, also_upload_to_latest=False):
     """
     Upload file to Tencent Cloud COS
     
@@ -25,6 +67,7 @@ def upload_file_to_cos(file_path, cos_key, bucket, region, secret_id, secret_key
         region: COS region
         secret_id: Tencent Cloud SecretId
         secret_key: Tencent Cloud SecretKey
+        also_upload_to_latest: Whether to also upload to latest folder
     """
     # Validate required parameters
     if not all([bucket, region, secret_id, secret_key]):
@@ -66,6 +109,28 @@ def upload_file_to_cos(file_path, cos_key, bucket, region, secret_id, secret_key
         url = f"https://{bucket}.cos.{region}.myqcloud.com/{cos_key}"
         print(f"Access URL: {url}")
         
+        # Also upload to latest folder if requested
+        if also_upload_to_latest:
+            file_name = os.path.basename(file_path)
+            latest_key = f"latest/{file_name}"
+            
+            # Delete existing files with 'me' prefix in latest folder
+            delete_files_with_prefix(client, bucket, "latest/", "me")
+            
+            print(f"Uploading to latest folder: {latest_key}")
+            latest_response = client.upload_file(
+                Bucket=bucket,
+                LocalFilePath=file_path,
+                Key=latest_key,
+                PartSize=1,
+                MAXThread=10,
+                EnableMD5=False
+            )
+            
+            print(f"Latest upload successful! ETag: {latest_response['ETag']}")
+            latest_url = f"https://{bucket}.cos.{region}.myqcloud.com/{latest_key}"
+            print(f"Latest access URL: {latest_url}")
+        
         return True
         
     except CosClientError as e:
@@ -86,6 +151,7 @@ def main():
     parser.add_argument('--region', required=True, help='COS region')
     parser.add_argument('--secret-id', required=True, help='Tencent Cloud SecretId')
     parser.add_argument('--secret-key', required=True, help='Tencent Cloud SecretKey')
+    parser.add_argument('--also-latest', action='store_true', help='Also upload to latest folder')
     
     args = parser.parse_args()
     
@@ -95,7 +161,8 @@ def main():
         bucket=args.bucket,
         region=args.region,
         secret_id=args.secret_id,
-        secret_key=args.secret_key
+        secret_key=args.secret_key,
+        also_upload_to_latest=args.also_latest
     )
     
     if success:
