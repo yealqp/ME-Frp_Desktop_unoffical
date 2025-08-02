@@ -111,8 +111,16 @@ def upload_file_to_cos(file_path, cos_key, bucket, region, secret_id, secret_key
         
         # Also upload to latest folder if requested
         if also_upload_to_latest:
-            file_name = os.path.basename(file_path)
-            latest_key = f"latest/{file_name}"
+            # Use fixed filename for latest folder (remove version number)
+            original_name = os.path.basename(file_path)
+            if '.msi' in original_name:
+                latest_filename = "me-frp-desktop-latest-x64.msi"
+            elif '.exe' in original_name:
+                latest_filename = "me-frp-desktop-latest-x64.exe"
+            else:
+                latest_filename = original_name  # fallback to original name
+            
+            latest_key = f"latest/{latest_filename}"
             
             # Delete existing files with 'me' prefix in latest folder
             delete_files_with_prefix(client, bucket, "latest/", "me")
