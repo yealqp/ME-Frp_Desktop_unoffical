@@ -90,34 +90,60 @@
               <div v-else class="tunnel-items">
                 <!-- 现有隧道 -->
                 <div 
-                  v-for="tunnel in tunnels" 
+                  v-for="tunnel in sortedTunnels" 
                   :key="tunnel.proxyId" 
                   class="tunnel-item"
                   :class="{ 'tunnel-disabled': tunnel.isDisabled }"
                 >
-                  <n-checkbox 
-                     :checked="settings.autoStartTunnels.includes(tunnel.proxyId)"
-                     @update:checked="(checked) => handleTunnelAutoStartChange(tunnel.proxyId, checked)"
-                     :disabled="tunnel.isDisabled"
-                   >
-                    <div class="tunnel-info">
-                      <div class="tunnel-header">
-                        <span class="tunnel-name">{{ tunnel.proxyName }}</span>
-                        <n-tag 
-                          :type="tunnel.isDisabled ? 'default' : 'success'" 
-                          size="small"
-                          :bordered="false"
-                        >
-                          {{ tunnel.isDisabled ? '已禁用' : '正常' }}
-                        </n-tag>
+                  <div class="tunnel-item-content">
+                    <n-checkbox 
+                       :checked="settings.autoStartTunnels.includes(tunnel.proxyId)"
+                       @update:checked="(checked) => handleTunnelAutoStartChange(tunnel.proxyId, checked)"
+                       :disabled="tunnel.isDisabled"
+                     >
+                      <div class="tunnel-info">
+                        <div class="tunnel-header">
+                          <span class="tunnel-name">{{ tunnel.proxyName }}</span>
+                          <n-tag 
+                            :type="tunnel.isDisabled ? 'default' : 'success'" 
+                            size="small"
+                            :bordered="false"
+                          >
+                            {{ tunnel.isDisabled ? '已禁用' : '正常' }}
+                          </n-tag>
+                        </div>
+                        <div class="tunnel-details">
+                          <span class="tunnel-id">ID: {{ tunnel.proxyId }}</span>
+                          <span class="tunnel-type">{{ tunnel.proxyType.toUpperCase() }}</span>
+                          <span class="tunnel-port">{{ tunnel.localPort }} → {{ tunnel.remotePort || '自动分配' }}</span>
+                        </div>
                       </div>
-                      <div class="tunnel-details">
-                        <span class="tunnel-id">ID: {{ tunnel.proxyId }}</span>
-                        <span class="tunnel-type">{{ tunnel.proxyType.toUpperCase() }}</span>
-                        <span class="tunnel-port">{{ tunnel.localPort }} → {{ tunnel.remotePort || '自动分配' }}</span>
+                    </n-checkbox>
+                    
+                    <!-- 启动顺序调整 -->
+                    <div v-if="settings.autoStartTunnels.includes(tunnel.proxyId) && settings.autoStartTunnels.length > 1" class="tunnel-order-controls">
+                      <div class="order-buttons-vertical">
+                        <n-button 
+                          v-if="getAutoStartIndex(tunnel.proxyId) > 0"
+                          size="tiny" 
+                          quaternary 
+                          @click.stop="moveTunnelUp(tunnel.proxyId)"
+                          title="向上移动"
+                        >
+                          <i class="fas fa-arrow-up"></i>
+                        </n-button>
+                        <n-button 
+                          v-if="getAutoStartIndex(tunnel.proxyId) < settings.autoStartTunnels.length - 1"
+                          size="tiny" 
+                          quaternary 
+                          @click.stop="moveTunnelDown(tunnel.proxyId)"
+                          title="向下移动"
+                        >
+                          <i class="fas fa-arrow-down"></i>
+                        </n-button>
                       </div>
                     </div>
-                  </n-checkbox>
+                  </div>
                 </div>
                 
                 <!-- 已删除的隧道 -->
@@ -171,44 +197,7 @@
             />
           </div>
 
-          <!-- 启动顺序管理 -->
-          <div class="setting-item tunnel-order" v-if="selectedTunnels.length > 1">
-            <div class="setting-info">
-              <h4>启动顺序</h4>
-              <p>拖拽调整隧道的启动顺序，从上到下依次启动</p>
-            </div>
-            <div class="order-list">
-              <div 
-                v-for="(tunnelId, index) in settings.autoStartTunnels" 
-                :key="tunnelId"
-                class="order-item"
-              >
-                <div class="order-number">{{ index + 1 }}</div>
-                <div class="order-tunnel-info">
-                  <span class="order-tunnel-name">{{ getTunnelName(tunnelId) }}</span>
-                  <span class="order-tunnel-id">ID: {{ tunnelId }}</span>
-                </div>
-                <div class="order-actions">
-                  <n-button 
-                    size="small" 
-                    quaternary 
-                    @click="moveTunnelUp(index)"
-                    :disabled="index === 0"
-                  >
-                    <i class="fas fa-arrow-up"></i>
-                  </n-button>
-                  <n-button 
-                    size="small" 
-                    quaternary 
-                    @click="moveTunnelDown(index)"
-                    :disabled="index === settings.autoStartTunnels.length - 1"
-                  >
-                    <i class="fas fa-arrow-down"></i>
-                  </n-button>
-                </div>
-              </div>
-            </div>
-          </div>
+
         </n-space>
       </n-card>
 
@@ -239,16 +228,10 @@
 import { ref, onMounted, computed } from 'vue';
 import { useMessage, useDialog, NCard, NSwitch, NButton, NInputNumber, NSpace, NCheckbox, NTag } from 'naive-ui';
 import { invoke } from '@tauri-apps/api/core';
+import type { UnifiedConfig, AppSettings } from '../types/config';
 
-interface Settings {
-  autoStart: boolean;
-  alwaysOnTop: boolean;
-  autoUpdate: boolean;
-  autoStartTunnels: number[];
-  startupDelay: number;
-  theme: string;
-  minimizeToTray: boolean;
-}
+// 使用导入的AppSettings类型
+type Settings = AppSettings;
 
 interface TunnelOption {
   label: string;
@@ -294,12 +277,7 @@ const tunnelLoading = ref(false);
 // 隧道选项（保留兼容性）
 const tunnelOptions = ref<TunnelOption[]>([]);
 
-// 计算属性：已选择的隧道
-const selectedTunnels = computed(() => {
-  return tunnels.value.filter(tunnel => 
-    settings.value.autoStartTunnels.includes(tunnel.proxyId)
-  );
-});
+
 
 // 计算属性：已删除的隧道（配置中存在但API中不存在）
 const deletedTunnels = computed(() => {
@@ -307,6 +285,30 @@ const deletedTunnels = computed(() => {
   return settings.value.autoStartTunnels.filter(tunnelId => 
     !existingTunnelIds.includes(tunnelId)
   );
+});
+
+// 计算属性：按自启动顺序排序的隧道列表
+const sortedTunnels = computed(() => {
+  const autoStartIds = settings.value.autoStartTunnels;
+  const autoStartTunnels: Tunnel[] = [];
+  const otherTunnels: Tunnel[] = [];
+  
+  // 按照autoStartTunnels的顺序添加自启动隧道
+  autoStartIds.forEach(id => {
+    const tunnel = tunnels.value.find(t => t.proxyId === id);
+    if (tunnel) {
+      autoStartTunnels.push(tunnel);
+    }
+  });
+  
+  // 添加非自启动隧道
+  tunnels.value.forEach(tunnel => {
+    if (!autoStartIds.includes(tunnel.proxyId)) {
+      otherTunnels.push(tunnel);
+    }
+  });
+  
+  return [...autoStartTunnels, ...otherTunnels];
 });
 // 处理开机自启动变化
 const handleAutoStartChange = async (value: boolean) => {
@@ -343,14 +345,13 @@ const handleAutoUpdateChange = (value: boolean) => {
 // 处理单个隧道自启动变化
 const handleTunnelAutoStartChange = (proxyId: number, checked: boolean) => {
   if (checked) {
+    // 确保不重复添加
     if (!settings.value.autoStartTunnels.includes(proxyId)) {
       settings.value.autoStartTunnels.push(proxyId);
     }
   } else {
-    const index = settings.value.autoStartTunnels.indexOf(proxyId);
-    if (index > -1) {
-      settings.value.autoStartTunnels.splice(index, 1);
-    }
+    // 移除所有匹配的项（防止重复）
+    settings.value.autoStartTunnels = settings.value.autoStartTunnels.filter(id => id !== proxyId);
   }
   message.success('自启动隧道设置已更新');
   saveSettings();
@@ -386,7 +387,7 @@ const checkForUpdates = async (showNoUpdateMessage = true) => {
       // 弹窗询问用户是否要更新
       dialog.warning({
         title: '发现新版本',
-        content: `发现新版本 ${result.latest_version}，当前版本 ${result.current_version}。更新时手动替换可执行文件即可，是否要立即更新？`,
+        content: `发现新版本 ${result.latest_version}，当前版本 ${result.current_version}，是否要立即更新？注意:更新前请关闭进程或所有正在运行的隧道。`,
         positiveText: '立即更新',
         negativeText: '稍后提醒',
         onPositiveClick: () => {
@@ -426,7 +427,22 @@ const autoCheckForUpdates = async () => {
 // 保存设置
 const saveSettings = async () => {
   try {
-    await invoke('save_settings', { settings: settings.value });
+    // 首先加载当前的统一配置
+    const currentConfig = await invoke<UnifiedConfig>('load_unified_config');
+    
+    // 更新设置部分
+    const updatedConfig: UnifiedConfig = {
+      ...currentConfig,
+      autoStart: settings.value.autoStart,
+      alwaysOnTop: settings.value.alwaysOnTop,
+      autoUpdate: settings.value.autoUpdate,
+      autoStartTunnels: settings.value.autoStartTunnels,
+      startupDelay: settings.value.startupDelay,
+      theme: settings.value.theme,
+      minimizeToTray: settings.value.minimizeToTray
+    };
+    
+    await invoke('save_unified_config', { config: updatedConfig });
   } catch (error) {
     console.error('保存设置失败:', error);
   }
@@ -435,9 +451,17 @@ const saveSettings = async () => {
 // 加载设置
 const loadSettings = async () => {
   try {
-    const savedSettings = await invoke('load_settings');
-    if (savedSettings) {
-      settings.value = { ...settings.value, ...savedSettings };
+    const unifiedConfig = await invoke<UnifiedConfig>('load_unified_config');
+    if (unifiedConfig) {
+      settings.value = {
+        autoStart: unifiedConfig.autoStart || false,
+        alwaysOnTop: unifiedConfig.alwaysOnTop || false,
+        autoUpdate: unifiedConfig.autoUpdate !== undefined ? unifiedConfig.autoUpdate : true,
+        autoStartTunnels: unifiedConfig.autoStartTunnels || [],
+        startupDelay: unifiedConfig.startupDelay || 5,
+        theme: unifiedConfig.theme || 'dark',
+        minimizeToTray: unifiedConfig.minimizeToTray !== undefined ? unifiedConfig.minimizeToTray : true
+      };
     }
     
     // 同步最小化到托盘设置到后端
@@ -460,11 +484,26 @@ const loadTunnels = async () => {
     
     if (result.code === 200 && Array.isArray(result.data)) {
       tunnels.value = result.data;
+      
+      // 清理无效的自启动隧道ID
+      const validTunnelIds = result.data.map((tunnel: Tunnel) => tunnel.proxyId);
+      const originalCount = settings.value.autoStartTunnels.length;
+      settings.value.autoStartTunnels = settings.value.autoStartTunnels.filter(id => 
+        validTunnelIds.includes(id)
+      );
+      
+      // 如果清理了无效ID，保存设置并提示用户
+      if (originalCount !== settings.value.autoStartTunnels.length) {
+        const removedCount = originalCount - settings.value.autoStartTunnels.length;
+        message.warning(`已自动清理 ${removedCount} 个无效的自启动隧道配置`);
+        saveSettings();
+      }
+      
       // 更新隧道选项（保留兼容性）
-       tunnelOptions.value = result.data.map((tunnel: Tunnel) => ({
-         label: `${tunnel.proxyName} (ID: ${tunnel.proxyId})`,
-         value: tunnel.proxyId
-       }));
+      tunnelOptions.value = result.data.map((tunnel: Tunnel) => ({
+        label: `${tunnel.proxyName} (ID: ${tunnel.proxyId})`,
+        value: tunnel.proxyId
+      }));
       console.log(`成功加载 ${result.data.length} 个隧道`);
     } else {
       console.error('获取隧道列表失败:', result.message);
@@ -489,8 +528,13 @@ const selectAllTunnels = () => {
   const enabledTunnels = tunnels.value.filter(tunnel => !tunnel.isDisabled);
   const allEnabledIds = enabledTunnels.map(tunnel => tunnel.proxyId);
   
-  // 合并现有的已选择隧道和所有可用隧道
-  const newSelection = [...new Set([...settings.value.autoStartTunnels, ...allEnabledIds])];
+  // 先清理无效的隧道ID，然后添加所有可用的隧道
+  const validExistingIds = settings.value.autoStartTunnels.filter(id => 
+    tunnels.value.some(tunnel => tunnel.proxyId === id)
+  );
+  
+  // 合并有效的现有选择和所有可用隧道，去重
+  const newSelection = [...new Set([...validExistingIds, ...allEnabledIds])];
   settings.value.autoStartTunnels = newSelection;
   
   message.success(`已选择 ${enabledTunnels.length} 个可用隧道`);
@@ -504,14 +548,16 @@ const clearAllTunnels = () => {
   saveSettings();
 };
 
-// 获取隧道名称
-const getTunnelName = (tunnelId: number): string => {
-  const tunnel = tunnels.value.find(t => t.proxyId === tunnelId);
-  return tunnel ? tunnel.proxyName : `隧道 ${tunnelId}`;
+
+
+// 获取隧道在自启动列表中的索引
+const getAutoStartIndex = (proxyId: number) => {
+  return settings.value.autoStartTunnels.indexOf(proxyId);
 };
 
 // 向上移动隧道
-const moveTunnelUp = (index: number) => {
+const moveTunnelUp = (tunnelId: number) => {
+  const index = settings.value.autoStartTunnels.indexOf(tunnelId);
   if (index > 0) {
     const tunnels = [...settings.value.autoStartTunnels];
     [tunnels[index], tunnels[index - 1]] = [tunnels[index - 1], tunnels[index]];
@@ -522,8 +568,9 @@ const moveTunnelUp = (index: number) => {
 };
 
 // 向下移动隧道
-const moveTunnelDown = (index: number) => {
-  if (index < settings.value.autoStartTunnels.length - 1) {
+const moveTunnelDown = (tunnelId: number) => {
+  const index = settings.value.autoStartTunnels.indexOf(tunnelId);
+  if (index >= 0 && index < settings.value.autoStartTunnels.length - 1) {
     const tunnels = [...settings.value.autoStartTunnels];
     [tunnels[index], tunnels[index + 1]] = [tunnels[index + 1], tunnels[index]];
     settings.value.autoStartTunnels = tunnels;
@@ -733,80 +780,37 @@ onMounted(() => {
   font-family: 'Courier New', monospace;
 }
 
-/* 启动顺序管理样式 */
-.tunnel-order {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.order-list {
+/* 隧道项内容布局 */
+.tunnel-item-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   width: 100%;
-  border: 1px solid #29292c;
-  border-radius: 6px;
-  background: #1a1a1e;
-  overflow: hidden;
 }
 
-.order-item {
+/* 启动顺序控制样式 */
+.tunnel-order-controls {
   display: flex;
   align-items: center;
-  padding: 12px 16px;
-  border-bottom: 1px solid #29292c;
-  background: #1a1a1e;
-  transition: all 0.2s ease;
-}
-
-.order-item:last-child {
-  border-bottom: none;
-}
-
-.order-item:hover {
-  background: #1e1e22;
-}
-
-.order-number {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: #349ff4;
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 600;
-  font-size: 14px;
-  margin-right: 12px;
+  margin-left: 12px;
   flex-shrink: 0;
 }
 
-.order-tunnel-info {
-  flex: 1;
+.order-buttons-vertical {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-.order-tunnel-name {
-  color: #ffffff;
-  font-size: 14px;
-  font-weight: 500;
+.order-buttons-vertical .n-button {
+  width: 24px;
+  height: 20px;
+  padding: 0;
+  min-width: unset;
 }
 
-.order-tunnel-id {
-  color: #a0a0a0;
-  font-size: 12px;
-}
-
-.order-actions {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.order-actions .n-button {
-  width: 32px;
-  height: 32px;
+.order-buttons-vertical .n-button i {
+  font-size: 10px;
 }
 
 @media (max-width: 768px) {

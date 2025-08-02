@@ -229,10 +229,11 @@ const formRules = {
 const tunnelTypeOptions = computed(() => {
   const allowedTypes = props.selectedNode.allowType.toLowerCase().split(';');
   const allTypes = [
-    { label: 'HTTP', value: 'http' },
-    { label: 'HTTPS', value: 'https' },
     { label: 'TCP', value: 'tcp' },
-    { label: 'UDP', value: 'udp' }
+    { label: 'UDP', value: 'udp' },
+    { label: 'HTTP', value: 'http' },
+    { label: 'HTTPS', value: 'https' }
+
   ];
 
   return allTypes.filter(type => allowedTypes.includes(type.value));
@@ -340,8 +341,8 @@ async function createTunnel() {
         localPort: null,
         remotePort: null,
         customDomain: '',
-        hostHeaderRewrite: '1',
-        headerXFromWhere: '1',
+        hostHeaderRewrite: '',
+        headerXFromWhere: '',
         proxyProtocolVersion: '',
         useEncryption: true,
         useCompression: true

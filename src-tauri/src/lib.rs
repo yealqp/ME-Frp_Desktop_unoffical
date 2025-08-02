@@ -1,11 +1,13 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use serde::{Deserialize, Serialize};
+use serde_yaml;
 use std::fs;
 use std::process::{Command, Child, Stdio};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::env;
 
 
 use std::io::{BufRead, BufReader};
@@ -14,7 +16,7 @@ use reqwest;
 use tokio::task;
 
 // 当前应用版本
-const CURRENT_VERSION: &str = "1.2";
+const CURRENT_VERSION: &str = "1.3";
 
 // 远程版本信息结构体
 #[derive(Serialize, Deserialize, Debug)]
@@ -199,6 +201,39 @@ struct FrpTokenData {
     token: String,
 }
 
+// 统一的配置结构体，包含登录信息和应用设置
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct UnifiedConfig {
+    // 登录相关配置
+    #[serde(rename = "apiStatus")]
+    api_status: String,
+    #[serde(rename = "loginTime")]
+    login_time: String,
+    #[serde(rename = "userToken")]
+    user_token: String,
+    #[serde(rename = "frpToken")]
+    frp_token: String,
+    username: String,
+    #[serde(rename = "userInfo")]
+    user_info: UserInfo,
+    
+    // 应用设置
+    #[serde(rename = "autoStart")]
+    auto_start: bool,
+    #[serde(rename = "alwaysOnTop")]
+    always_on_top: bool,
+    #[serde(rename = "autoUpdate")]
+    auto_update: bool,
+    #[serde(rename = "autoStartTunnels")]
+    auto_start_tunnels: Vec<i32>,
+    #[serde(rename = "startupDelay")]
+    startup_delay: i32,
+    theme: String,
+    #[serde(rename = "minimizeToTray")]
+    minimize_to_tray: bool,
+}
+
+// 保持向后兼容的Config结构体
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct Config {
     api_status: String,
@@ -227,6 +262,32 @@ struct AppSettings {
     minimize_to_tray: bool,
 }
 
+impl Default for UnifiedConfig {
+    fn default() -> Self {
+        Self {
+            // 登录相关默认值
+            api_status: String::new(),
+            login_time: String::new(),
+            user_token: String::new(),
+            frp_token: String::new(),
+            username: String::new(),
+            user_info: UserInfo {
+                group: None,
+                token: None,
+                username: None,
+            },
+            // 应用设置默认值
+            auto_start: false,
+            always_on_top: false,
+            auto_update: true,
+            auto_start_tunnels: Vec::new(),
+            startup_delay: 5,
+            theme: "dark".to_string(),
+            minimize_to_tray: true,
+        }
+    }
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -242,17 +303,11 @@ impl Default for AppSettings {
 }
 
 #[tauri::command]
-async fn save_config(app_handle: tauri::AppHandle, config: Config) -> Result<String, String> {
-    let app_data_dir = app_handle.path().app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+async fn save_config(_app_handle: tauri::AppHandle, config: Config) -> Result<String, String> {
+    let current_dir = env::current_dir()
+        .map_err(|e| format!("Failed to get current dir: {}", e))?;
     
-    // 确保目录存在
-    if !app_data_dir.exists() {
-        fs::create_dir_all(&app_data_dir)
-            .map_err(|e| format!("Failed to create app data dir: {}", e))?;
-    }
-    
-    let config_path = app_data_dir.join("config.yaml");
+    let config_path = current_dir.join("config.json");
     
     // 将配置转换为YAML格式
     let yaml_content = format!(
@@ -274,11 +329,11 @@ async fn save_config(app_handle: tauri::AppHandle, config: Config) -> Result<Str
 }
 
 #[tauri::command]
-async fn read_config(app_handle: tauri::AppHandle) -> Result<Option<Config>, String> {
-    let app_data_dir = app_handle.path().app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+async fn read_config(_app_handle: tauri::AppHandle) -> Result<Option<Config>, String> {
+    let current_dir = env::current_dir()
+        .map_err(|e| format!("Failed to get current dir: {}", e))?;
     
-    let config_path = app_data_dir.join("config.yaml");
+    let config_path = current_dir.join("config.json");
     
     if !config_path.exists() {
         return Ok(None);
@@ -325,11 +380,11 @@ async fn read_config(app_handle: tauri::AppHandle) -> Result<Option<Config>, Str
 }
 
 #[tauri::command]
-async fn clear_config(app_handle: tauri::AppHandle) -> Result<String, String> {
-    let app_data_dir = app_handle.path().app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+async fn clear_config(_app_handle: tauri::AppHandle) -> Result<String, String> {
+    let current_dir = env::current_dir()
+        .map_err(|e| format!("Failed to get current dir: {}", e))?;
     
-    let config_path = app_data_dir.join("config.yaml");
+    let config_path = current_dir.join("config.json");
     
     if config_path.exists() {
         fs::remove_file(&config_path)
@@ -398,12 +453,30 @@ async fn api_login(app_handle: tauri::AppHandle, username: String, password: Str
         }
     }
     
-    // 创建配置
+    // 加载当前统一配置（保留应用设置）
+    let mut unified_config = load_unified_config(app_handle.clone()).await.unwrap_or_default();
+    
+    // 更新登录相关信息
+    unified_config.api_status = "connected".to_string();
+    unified_config.login_time = chrono::Utc::now().to_rfc3339();
+    unified_config.user_token = user_token.clone();
+    unified_config.frp_token = frp_token.clone();
+    unified_config.username = username.clone();
+    unified_config.user_info = UserInfo {
+        group: Some(login_data.group.clone()),
+        token: Some(user_token.clone()),
+        username: Some(login_data.username.clone()),
+    };
+    
+    // 保存统一配置
+    save_unified_config(app_handle, unified_config).await?;
+    
+    // 返回兼容的Config结构体
     let config = Config {
         api_status: "connected".to_string(),
         login_time: chrono::Utc::now().to_rfc3339(),
         user_token: user_token.clone(),
-        frp_token,
+        frp_token: frp_token.clone(),
         username: username.clone(),
         user_info: UserInfo {
             group: Some(login_data.group),
@@ -412,18 +485,15 @@ async fn api_login(app_handle: tauri::AppHandle, username: String, password: Str
         },
     };
     
-    // 保存配置
-    save_config(app_handle, config.clone()).await?;
-    
     Ok(config)
 }
 
 // 获取用户信息API命令
 #[tauri::command]
 async fn api_get_user_info(app_handle: tauri::AppHandle) -> Result<UserDetailInfo, String> {
-    // 读取配置获取token
-    let config = read_config(app_handle).await?
-        .ok_or("未找到配置文件")?;
+    // 从统一配置读取token
+    let config = load_unified_config(app_handle).await
+        .map_err(|_| "未找到配置文件")?;
     
     if config.user_token.is_empty() {
         return Err("未找到有效的token".to_string());
@@ -458,9 +528,9 @@ async fn api_get_user_info(app_handle: tauri::AppHandle) -> Result<UserDetailInf
 // 获取系统公告API命令
 #[tauri::command]
 async fn api_get_announcements(app_handle: tauri::AppHandle) -> Result<String, String> {
-    // 读取配置获取token
-    let config = read_config(app_handle).await?
-        .ok_or("未找到配置文件")?;
+    // 从统一配置读取token
+    let config = load_unified_config(app_handle).await
+        .map_err(|_| "未找到配置文件")?;
     
     if config.user_token.is_empty() {
         return Err("未找到有效的token".to_string());
@@ -497,8 +567,8 @@ async fn api_get_announcements(app_handle: tauri::AppHandle) -> Result<String, S
 #[tauri::command]
 async fn api_get_node_list(app_handle: tauri::AppHandle) -> Result<String, String> {
     // 读取配置获取token
-    let config = read_config(app_handle).await?
-        .ok_or("未找到配置文件")?;
+    let config = load_unified_config(app_handle).await
+        .map_err(|_| "未找到配置文件")?;
     
     if config.user_token.is_empty() {
         return Err("未找到有效的token".to_string());
@@ -529,8 +599,8 @@ async fn api_get_node_list(app_handle: tauri::AppHandle) -> Result<String, Strin
 // 编辑隧道API命令
 #[tauri::command]
 async fn api_update_tunnel(app_handle: tauri::AppHandle, data: String) -> Result<String, String> {
-    let config = read_config(app_handle).await?
-        .ok_or("未找到配置文件")?;
+    let config = load_unified_config(app_handle).await
+        .map_err(|_| "未找到配置文件")?;
 
     if config.user_token.is_empty() {
         return Err("未找到有效的token".to_string());
@@ -564,8 +634,8 @@ async fn api_update_tunnel(app_handle: tauri::AppHandle, data: String) -> Result
 // 强制下线隧道API命令
 #[tauri::command]
 async fn api_kick_tunnel(app_handle: tauri::AppHandle, proxy_id: i32) -> Result<String, String> {
-    let config = read_config(app_handle).await?
-        .ok_or("未找到配置文件")?;
+    let config = load_unified_config(app_handle).await
+        .map_err(|_| "未找到配置文件")?;
 
     if config.user_token.is_empty() {
         return Err("未找到有效的token".to_string());
@@ -600,8 +670,8 @@ async fn api_kick_tunnel(app_handle: tauri::AppHandle, proxy_id: i32) -> Result<
 // 启用/禁用隧道API命令
 #[tauri::command]
 async fn api_toggle_tunnel(app_handle: tauri::AppHandle, proxy_id: i32, is_disabled: bool) -> Result<String, String> {
-    let config = read_config(app_handle).await?
-        .ok_or("未找到配置文件")?;
+    let config = load_unified_config(app_handle).await
+        .map_err(|_| "未找到配置文件")?;
 
     if config.user_token.is_empty() {
         return Err("未找到有效的token".to_string());
@@ -637,8 +707,8 @@ async fn api_toggle_tunnel(app_handle: tauri::AppHandle, proxy_id: i32, is_disab
 // 获取节点简要信息API命令
 #[tauri::command]
 async fn api_get_node_name_list(app_handle: tauri::AppHandle) -> Result<String, String> {
-    let config = read_config(app_handle).await?
-        .ok_or("未找到配置文件")?;
+    let config = load_unified_config(app_handle).await
+        .map_err(|_| "未找到配置文件")?;
 
     if config.user_token.is_empty() {
         return Err("未找到有效的token".to_string());
@@ -690,8 +760,8 @@ async fn api_get_running_tunnels(process_manager: tauri::State<'_, ProcessManage
 #[tauri::command]
 async fn api_get_node_status(app_handle: tauri::AppHandle) -> Result<String, String> {
     // 读取配置获取token
-    let config = read_config(app_handle).await?
-        .ok_or("未找到配置文件")?;
+    let config = load_unified_config(app_handle).await
+        .map_err(|_| "未找到配置文件")?;
     
     if config.user_token.is_empty() {
         return Err("未找到有效的token".to_string());
@@ -722,8 +792,8 @@ async fn api_get_node_status(app_handle: tauri::AppHandle) -> Result<String, Str
 // 获取空闲端口API命令
 #[tauri::command]
 async fn api_get_free_port(app_handle: tauri::AppHandle, data: String) -> Result<String, String> {
-    let config = read_config(app_handle).await?
-        .ok_or("未找到配置文件")?;
+    let config = load_unified_config(app_handle).await
+        .map_err(|_| "未找到配置文件")?;
 
     if config.user_token.is_empty() {
         return Err("未找到有效的token".to_string());
@@ -760,8 +830,8 @@ async fn api_get_free_port(app_handle: tauri::AppHandle, data: String) -> Result
 // 创建隧道API命令
 #[tauri::command]
 async fn api_create_tunnel(app_handle: tauri::AppHandle, data: String) -> Result<String, String> {
-    let config = read_config(app_handle).await?
-        .ok_or("未找到配置文件")?;
+    let config = load_unified_config(app_handle).await
+        .map_err(|_| "未找到配置文件")?;
 
     if config.user_token.is_empty() {
         return Err("未找到有效的token".to_string());
@@ -795,8 +865,8 @@ async fn api_create_tunnel(app_handle: tauri::AppHandle, data: String) -> Result
 // 获取隧道列表API命令
 #[tauri::command]
 async fn api_get_tunnel_list(app_handle: tauri::AppHandle) -> Result<String, String> {
-    let config = read_config(app_handle).await?
-        .ok_or("未找到配置文件")?;
+    let config = load_unified_config(app_handle).await
+        .map_err(|_| "未找到配置文件")?;
 
     if config.user_token.is_empty() {
         return Err("未找到有效的token".to_string());
@@ -826,8 +896,8 @@ async fn api_get_tunnel_list(app_handle: tauri::AppHandle) -> Result<String, Str
 // 启动隧道命令（使用mefrpc.exe）
 #[tauri::command]
 async fn api_start_tunnel(app_handle: tauri::AppHandle, proxy_id: i32, process_manager: tauri::State<'_, ProcessManager>) -> Result<String, String> {
-    let config = read_config(app_handle.clone()).await?
-        .ok_or("未找到配置文件")?;
+    let config = load_unified_config(app_handle.clone()).await
+        .map_err(|_| "未找到配置文件")?;
 
     if config.frp_token.is_empty() {
         return Err("未找到有效的frp_token".to_string());
@@ -962,8 +1032,8 @@ async fn api_stop_tunnel(_app_handle: tauri::AppHandle, proxy_id: i32, process_m
 // 删除隧道API命令
 #[tauri::command]
 async fn api_delete_tunnel(app_handle: tauri::AppHandle, proxy_id: i32) -> Result<String, String> {
-    let config = read_config(app_handle).await?
-        .ok_or("未找到配置文件")?;
+    let config = load_unified_config(app_handle).await
+        .map_err(|_| "未找到配置文件")?;
 
     if config.user_token.is_empty() {
         return Err("未找到有效的token".to_string());
@@ -997,16 +1067,11 @@ async fn api_delete_tunnel(app_handle: tauri::AppHandle, proxy_id: i32) -> Resul
 
 // 保存应用设置
 #[tauri::command]
-async fn save_settings(app_handle: tauri::AppHandle, settings: AppSettings) -> Result<String, String> {
-    let app_data_dir = app_handle.path().app_data_dir()
-        .map_err(|e| format!("获取应用数据目录失败: {}", e))?;
+async fn save_settings(_app_handle: tauri::AppHandle, settings: AppSettings) -> Result<String, String> {
+    let current_dir = env::current_dir()
+        .map_err(|e| format!("获取当前目录失败: {}", e))?;
     
-    if !app_data_dir.exists() {
-        fs::create_dir_all(&app_data_dir)
-            .map_err(|e| format!("创建应用数据目录失败: {}", e))?;
-    }
-    
-    let settings_path = app_data_dir.join("settings.json");
+    let settings_path = current_dir.join("settings.json");
     let settings_json = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("序列化设置失败: {}", e))?;
     
@@ -1018,11 +1083,11 @@ async fn save_settings(app_handle: tauri::AppHandle, settings: AppSettings) -> R
 
 // 加载应用设置
 #[tauri::command]
-async fn load_settings(app_handle: tauri::AppHandle) -> Result<AppSettings, String> {
-    let app_data_dir = app_handle.path().app_data_dir()
-        .map_err(|e| format!("获取应用数据目录失败: {}", e))?;
+async fn load_settings(_app_handle: tauri::AppHandle) -> Result<AppSettings, String> {
+    let current_dir = env::current_dir()
+        .map_err(|e| format!("获取当前目录失败: {}", e))?;
     
-    let settings_path = app_data_dir.join("settings.json");
+    let settings_path = current_dir.join("settings.json");
     
     if !settings_path.exists() {
         return Ok(AppSettings::default());
@@ -1237,6 +1302,77 @@ fn compare_versions(current: &str, latest: &str) -> bool {
     latest_parts[2] > current_parts[2]
 }
 
+// 统一配置管理函数
+#[tauri::command]
+async fn save_unified_config(_app_handle: tauri::AppHandle, config: UnifiedConfig) -> Result<String, String> {
+    let current_dir = env::current_dir().map_err(|e| e.to_string())?;
+    let config_path = current_dir.join("config.yaml");
+    
+    let yaml_content = serde_yaml::to_string(&config).map_err(|e| e.to_string())?;
+    fs::write(&config_path, yaml_content).map_err(|e| e.to_string())?;
+    
+    Ok("统一配置保存成功".to_string())
+}
+
+#[tauri::command]
+async fn load_unified_config(app_handle: tauri::AppHandle) -> Result<UnifiedConfig, String> {
+    let current_dir = env::current_dir().map_err(|e| e.to_string())?;
+    let config_path = current_dir.join("config.yaml");
+    
+    if config_path.exists() {
+        // 如果统一配置文件存在，直接加载
+        let content = fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
+        let config: UnifiedConfig = serde_yaml::from_str(&content).map_err(|e| e.to_string())?;
+        return Ok(config);
+    }
+    
+    // 如果统一配置文件不存在，尝试迁移旧配置
+    migrate_old_configs(app_handle).await
+}
+
+#[tauri::command]
+async fn migrate_old_configs(app_handle: tauri::AppHandle) -> Result<UnifiedConfig, String> {
+    let mut unified_config = UnifiedConfig::default();
+    
+    // 尝试加载旧的config.json
+    if let Ok(Some(old_config)) = read_config(app_handle.clone()).await {
+        unified_config.api_status = old_config.api_status;
+        unified_config.login_time = old_config.login_time;
+        unified_config.user_token = old_config.user_token;
+        unified_config.frp_token = old_config.frp_token;
+        unified_config.username = old_config.username;
+        unified_config.user_info = old_config.user_info;
+    }
+    
+    // 尝试加载旧的settings.json
+    if let Ok(old_settings) = load_settings(app_handle.clone()).await {
+        unified_config.auto_start = old_settings.auto_start;
+        unified_config.always_on_top = old_settings.always_on_top;
+        unified_config.auto_update = old_settings.auto_update;
+        unified_config.auto_start_tunnels = old_settings.auto_start_tunnels;
+        unified_config.startup_delay = old_settings.startup_delay;
+        unified_config.theme = old_settings.theme;
+        unified_config.minimize_to_tray = old_settings.minimize_to_tray;
+    }
+    
+    // 保存统一配置
+    save_unified_config(app_handle.clone(), unified_config.clone()).await?;
+    
+    // 删除旧配置文件
+    let current_dir = env::current_dir().map_err(|e| e.to_string())?;
+    let old_config_path = current_dir.join("config.json");
+    let old_settings_path = current_dir.join("settings.json");
+    
+    if old_config_path.exists() {
+        let _ = fs::remove_file(old_config_path);
+    }
+    if old_settings_path.exists() {
+        let _ = fs::remove_file(old_settings_path);
+    }
+    
+    Ok(unified_config)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let process_manager: ProcessManager = Arc::new(Mutex::new(HashMap::new()));
@@ -1254,6 +1390,14 @@ pub fn run() {
             }
         }))
         .setup(|app| {
+            // 在应用启动时检查并加载配置（如果需要则迁移旧配置）
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = load_unified_config(app_handle).await {
+                    eprintln!("配置加载失败: {}", e);
+                }
+            });
+            
             // 创建系统托盘菜单
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&quit])?;
@@ -1394,6 +1538,9 @@ pub fn run() {
             api_get_running_tunnels,
             save_settings,
             load_settings,
+            save_unified_config,
+            load_unified_config,
+            migrate_old_configs,
             set_auto_start,
             set_always_on_top,
             show_window,

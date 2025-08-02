@@ -12,6 +12,7 @@ import Settings from './components/Settings.vue'
 import About from './components/About.vue'
 import HelpCenter from './components/HelpCenter.vue'
 import Login from './components/Login.vue'
+import type { UnifiedConfig } from './types/config'
 
 interface Tunnel {
   id: number;
@@ -54,6 +55,16 @@ interface UpdateCheckResult {
   has_update: boolean;
   latest_version: string;
   current_version: string;
+}
+
+interface Settings {
+  autoStart: boolean;
+  alwaysOnTop: boolean;
+  autoUpdate: boolean;
+  autoStartTunnels: number[];
+  startupDelay: number;
+  theme: string;
+  minimizeToTray: boolean;
 }
 
 // 自定义主题配置
@@ -186,30 +197,13 @@ function handleGoToCreateTunnel() {
 // 配置相关函数
 const checkAuthStatus = async (): Promise<void> => {
   try {
-    // 首先尝试从Rust后端读取配置
-    let config = null
-    try {
-      const result = await invoke('read_config')
-      if (result) {
-        config = result
-        console.log('从config.yaml读取配置:', config)
-      }
-    } catch (error) {
-      console.log('读取config.yaml失败，尝试从localStorage读取:', error)
-    }
-    
-    // 如果后端读取失败，尝试从localStorage读取
-    if (!config) {
-      const configStr = localStorage.getItem('mefrp_config')
-      if (configStr) {
-        config = JSON.parse(configStr)
-        console.log('从localStorage读取配置:', config)
-      }
-    }
+    // 从统一配置读取
+    const config = await invoke<UnifiedConfig>('load_unified_config')
+    console.log('从统一配置读取:', config)
     
     if (config) {
       // 检查是否有API连接状态或有效的user_token
-      if (config.api_status === 'connected' || config.user_token) {
+      if (config.apiStatus === 'connected' || config.userToken) {
         isLoggedIn.value = true
       }
     }
@@ -231,12 +225,26 @@ const handleLogout = async (): Promise<void> => {
   // 清除本地存储的配置
   localStorage.removeItem('mefrp_config')
   
-  // 同时清除Rust后端的配置文件
+  // 清除统一配置中的登录相关信息，但保留应用设置
   try {
-    await invoke('clear_config')
-    console.log('已清除后端配置文件')
+    const config = await invoke<UnifiedConfig>('load_unified_config')
+    const clearedConfig: UnifiedConfig = {
+      ...config,
+      apiStatus: '',
+      loginTime: '',
+      userToken: '',
+      frpToken: '',
+      username: '',
+      userInfo: {
+        group: null,
+        token: null,
+        username: null
+      }
+    }
+    await invoke('save_unified_config', { config: clearedConfig })
+    console.log('已清除登录信息，保留应用设置')
   } catch (error) {
-    console.error('清除后端配置文件失败:', error)
+    console.error('清除登录信息失败:', error)
   }
 }
 
@@ -274,6 +282,101 @@ const autoCheckForUpdates = async () => {
   }
 };
 
+// 自动启动隧道的函数
+const autoStartTunnels = async () => {
+  try {
+    // 从统一配置读取自动启动隧道列表
+    const unifiedConfig = await invoke<UnifiedConfig>('load_unified_config')
+    
+    if (!unifiedConfig || !unifiedConfig.autoStartTunnels || unifiedConfig.autoStartTunnels.length === 0) {
+      console.log('没有配置自动启动的隧道')
+      return
+    }
+    
+    // 先获取服务器上的隧道列表，验证配置中的隧道是否仍然存在
+    let validTunnelIds: number[] = []
+    
+    try {
+      const responseText = await invoke('api_get_tunnel_list')
+      const result = JSON.parse(responseText as string)
+      
+      if (result.code === 200 && Array.isArray(result.data)) {
+        const serverTunnelIds = result.data.map((tunnel: any) => tunnel.proxyId)
+        const originalCount = unifiedConfig.autoStartTunnels.length
+        
+        // 过滤出仍然存在于服务器上的隧道
+        validTunnelIds = unifiedConfig.autoStartTunnels.filter(id => serverTunnelIds.includes(id))
+        
+        // 如果有隧道被删除，需要更新配置
+        if (validTunnelIds.length !== originalCount) {
+          const removedCount = originalCount - validTunnelIds.length
+          console.log(`检测到 ${removedCount} 个自启动隧道在服务器上已不存在，将自动清理配置`)
+          message.warning(`已自动清理 ${removedCount} 个无效的自启动隧道配置`)
+          
+          // 更新配置文件
+          const updatedConfig = { ...unifiedConfig, autoStartTunnels: validTunnelIds }
+          await invoke('save_unified_config', { config: updatedConfig })
+        }
+      } else {
+        console.error('获取隧道列表失败，跳过自启动验证:', result.message)
+        // 如果获取隧道列表失败，仍然尝试启动配置中的隧道
+        validTunnelIds = unifiedConfig.autoStartTunnels
+      }
+    } catch (error) {
+      console.error('验证自启动隧道时发生错误，跳过验证:', error)
+      // 如果验证失败，仍然尝试启动配置中的隧道
+      validTunnelIds = unifiedConfig.autoStartTunnels
+    }
+    
+    if (validTunnelIds.length === 0) {
+      console.log('没有有效的自启动隧道')
+      return
+    }
+    
+    const startupDelay = (unifiedConfig.startupDelay || 5) * 1000; // 转换为毫秒
+
+    console.log(`准备自启动 ${validTunnelIds.length} 个隧道，延迟 ${startupDelay / 1000} 秒`);
+    
+    // 延迟启动
+    setTimeout(async () => {
+      console.log('开始自启动隧道...');
+      
+      for (let i = 0; i < validTunnelIds.length; i++) {
+        const tunnelId = validTunnelIds[i];
+        
+        try {
+          console.log(`正在启动隧道 ${tunnelId} (${i + 1}/${validTunnelIds.length})`);
+          
+          // 调用API启动隧道
+          const responseText = await invoke('api_start_tunnel', { proxyId: tunnelId });
+          const result = JSON.parse(responseText as string);
+          
+          if (result.code === 200) {
+            console.log(`隧道 ${tunnelId} 启动成功`);
+            message.success(`自启动隧道 ${tunnelId} 成功`);
+          } else {
+            console.error(`隧道 ${tunnelId} 启动失败:`, result.message);
+            message.error(`自启动隧道 ${tunnelId} 失败: ${result.message}`);
+          }
+        } catch (error) {
+          console.error(`启动隧道 ${tunnelId} 时发生错误:`, error);
+          message.error(`自启动隧道 ${tunnelId} 失败: ${error}`);
+        }
+        
+        // 如果不是最后一个隧道，等待1秒再启动下一个
+        if (i < validTunnelIds.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+      
+      console.log('自启动隧道流程完成');
+    }, startupDelay);
+    
+  } catch (error) {
+    console.error('自启动隧道失败:', error);
+  }
+};
+
 // 组件挂载时检查登录状态
 onMounted(async () => {
 
@@ -295,6 +398,19 @@ console.log(`     __  _________   ______                  ___          __  __   
 
     checkAuthStatus();
     autoCheckForUpdates();
+    
+    // 等待登录完成后再启动自启动隧道
+    const waitForLogin = () => {
+      if (isLoggedIn.value && !isCheckingAuth.value) {
+        autoStartTunnels();
+      } else {
+        // 每500ms检查一次登录状态
+        setTimeout(waitForLogin, 500);
+      }
+    };
+    
+    // 开始等待登录
+    waitForLogin();
   })
 </script>
 

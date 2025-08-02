@@ -34,6 +34,7 @@
 import { ref, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { darkTheme, useMessage } from 'naive-ui'
+// import type { UnifiedConfig } from '../types/config'
 
 // 自定义主题配置
 const customTheme = {
@@ -125,18 +126,7 @@ async function handleLogin() {
 }
 
 onMounted(async () => {
-  // 清除之前的登录状态，确保重新登录
-  localStorage.removeItem('mefrp_config')
-
-  // 同时清除config.yaml文件（使用Rust后端）
-  try {
-    const result = await invoke('clear_config')
-    console.log('已清除config.yaml文件:', result)
-  } catch (error) {
-    console.log('清除config.yaml文件时出错:', error)
-  }
-
-  console.log('已清除登录状态，准备重新登录')
+  console.log('登录组件已加载，准备登录')
 })
 </script>
 

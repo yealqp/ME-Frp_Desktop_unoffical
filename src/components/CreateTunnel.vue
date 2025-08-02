@@ -471,11 +471,11 @@ function getNodeLoad(nodeId: number): number {
 // 根据负载获取颜色
 function getLoadColor(load: number): string {
   if (load <= 50) {
-    return '#915355'; // 绿色
+    return '#90ff96'; // 绿色
   } else if (load <= 80) {
-    return '#f2c97d'; // 橙黄色
+    return '#ffcf46'; // 橙黄色
   } else {
-    return '#915355'; // 红色
+    return '#ff452b'; // 红色
   }
 }
 
