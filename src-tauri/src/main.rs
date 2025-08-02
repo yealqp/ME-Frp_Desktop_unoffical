@@ -1,5 +1,4 @@
-// Prevents additional console window on Windows in release, DO NOT REMOVE!!
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Linux平台不需要特殊窗口设置
 
 fn main() {
     me_frp_desktop_unoffical_lib::run()

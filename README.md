@@ -12,7 +12,7 @@ An unofficial desktop client for ME-Frp service, built with modern web technolog
 
 ### ✨ Features
 
-- 🖥️ **Cross-platform Desktop App** - Built with Tauri for Windows, macOS, and Linux
+- 🖥️ **Linux Desktop App** - Built with Tauri for Linux
 - 🎯 **Node Management** - Browse and select available ME-Frp nodes
 - 📊 **Real-time Monitoring** - Monitor node status, load, and bandwidth
 - 🔧 **Tunnel Configuration** - Create and manage network tunnels
@@ -99,7 +99,7 @@ ME-Frp 服务的非官方桌面客户端，采用现代化 Web 技术构建。�
 
 ### ✨ 功能特性
 
-- 🖥️ **跨平台桌面应用** - 基于 Tauri 构建，支持 Windows、macOS 和 Linux
+- 🖥️ **Linux 桌面应用** - 基于 Tauri 构建，专为 Linux 平台设计
 - 🎯 **节点管理** - 浏览和选择可用的 ME-Frp 节点
 - 📊 **实时监控** - 监控节点状态、负载和带宽
 - 🔧 **隧道配置** - 创建和管理网络隧道

@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 use serde_yaml;
 use std::fs;
 use std::process::{Command, Child, Stdio};
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::env;
@@ -917,10 +915,13 @@ async fn api_start_tunnel(app_handle: tauri::AppHandle, proxy_id: i32, process_m
     let exe_dir = exe_path.parent()
         .ok_or("无法获取可执行文件目录")?;
     
-    let mefrpc_path = exe_dir.join("bin").join("mefrpc-x86_64-pc-windows-msvc.exe");
+    // Linux平台使用mefrpc
+    let mefrpc_filename = "mefrpc";
+    
+    let mefrpc_path = exe_dir.join("bin").join(mefrpc_filename);
 
     if !mefrpc_path.exists() {
-        return Err(format!("mefrpc.exe 不存在: {}", mefrpc_path.display()));
+        return Err(format!("mefrpc 不存在: {}", mefrpc_path.display()));
     }
 
     // 启动mefrpc进程
@@ -933,9 +934,7 @@ async fn api_start_tunnel(app_handle: tauri::AppHandle, proxy_id: i32, process_m
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     
-    // 在Windows上隐藏命令行窗口
-    #[cfg(windows)]
-    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    // Linux平台不需要特殊窗口设置
     
     let mut child = command
         .spawn()
@@ -1110,50 +1109,55 @@ async fn set_auto_start(enable: bool) -> Result<String, String> {
     // macOS: LaunchAgents
     // Linux: systemd 或 autostart
     
-    #[cfg(target_os = "windows")]
+    // Linux平台自启动实现
     {
-        use std::process::Command;
+        use std::path::PathBuf;
+        
+        // 获取用户的autostart目录
+        let home_dir = std::env::var("HOME")
+            .map_err(|_| "无法获取HOME环境变量".to_string())?;
+        let autostart_dir = PathBuf::from(home_dir)
+            .join(".config")
+            .join("autostart");
+        
+        // 确保autostart目录存在
+        if !autostart_dir.exists() {
+            std::fs::create_dir_all(&autostart_dir)
+                .map_err(|e| format!("创建autostart目录失败: {}", e))?;
+        }
+        
+        let desktop_file_path = autostart_dir.join("me-frp-desktop.desktop");
         
         if enable {
-            // 添加到注册表启动项
-            let output = Command::new("reg")
-                .args([
-                    "add",
-                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                    "/v",
-                    "ME-Frp",
-                    "/t",
-                    "REG_SZ",
-                    "/d",
-                    &format!("\"{}\"", std::env::current_exe().unwrap().display()),
-                    "/f"
-                ])
-                .output()
-                .map_err(|e| format!("执行注册表命令失败: {}", e))?;
+            // 创建.desktop文件
+            let exe_path = std::env::current_exe()
+                .map_err(|e| format!("获取当前可执行文件路径失败: {}", e))?;
             
-            if !output.status.success() {
-                return Err("设置开机自启动失败".to_string());
-            }
+            let desktop_content = format!(
+                "[Desktop Entry]\n\
+                Type=Application\n\
+                Name=ME-Frp Desktop\n\
+                Comment=ME-Frp Desktop Application\n\
+                Exec={}\n\
+                Icon=me-frp-desktop\n\
+                Hidden=false\n\
+                NoDisplay=false\n\
+                X-GNOME-Autostart-enabled=true\n",
+                exe_path.display()
+            );
+            
+            std::fs::write(&desktop_file_path, desktop_content)
+                .map_err(|e| format!("写入desktop文件失败: {}", e))?;
         } else {
-            // 从注册表删除启动项
-            let _output = Command::new("reg")
-                .args([
-                    "delete",
-                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                    "/v",
-                    "ME-Frp",
-                    "/f"
-                ])
-                .output()
-                .map_err(|e| format!("执行注册表命令失败: {}", e))?;
+            // 删除.desktop文件
+            if desktop_file_path.exists() {
+                std::fs::remove_file(&desktop_file_path)
+                    .map_err(|e| format!("删除desktop文件失败: {}", e))?;
+            }
         }
     }
     
-    #[cfg(not(target_os = "windows"))]
-    {
-        // 其他操作系统的实现
-        return Err("当前操作系统暂不支持开机自启动设置".to_string());
-    }
+
     
     Ok(if enable { "开机自启动已开启" } else { "开机自启动已关闭" }.to_string())
 }

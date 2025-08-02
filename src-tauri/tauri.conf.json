@@ -35,10 +35,15 @@
     "active": true,
     "targets": "all",
     "icon": [
-      "icons/icon.ico"
+      "icons/icon.png"
     ],
     "resources": [
-      "bin/mefrpc-x86_64-pc-windows-msvc.exe"
-    ]
+      "bin/mefrpc"
+    ],
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    }
   }
 }

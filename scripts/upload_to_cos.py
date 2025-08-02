@@ -8,11 +8,7 @@ from qcloud_cos import CosConfig
 from qcloud_cos import CosS3Client
 from qcloud_cos.cos_exception import CosClientError, CosServiceError
 
-# Set UTF-8 encoding for Windows
-if sys.platform == 'win32':
-    import codecs
-    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer)
-    sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer)
+# Linux平台不需要特殊编码设置
 
 def delete_files_with_prefix(client, bucket, prefix, file_prefix):
     """
@@ -112,13 +108,13 @@ def upload_file_to_cos(file_path, cos_key, bucket, region, secret_id, secret_key
         # Also upload to latest folder if requested
         if also_upload_to_latest:
             # Use fixed filename for latest folder (remove version number)
-            original_name = os.path.basename(file_path)
-            if '.msi' in original_name:
-                latest_filename = "ME-Frp-desktop-latest-x64.msi"
-            elif '.exe' in original_name:
-                latest_filename = "ME-Frp-desktop-latest-x64.exe"
-            else:
-                latest_filename = original_name  # fallback to original name
+             original_name = os.path.basename(file_path)
+             if '.deb' in original_name:
+                 latest_filename = "me-frp-desktop-latest-amd64.deb"
+             elif '.AppImage' in original_name:
+                 latest_filename = "me-frp-desktop-latest-x86_64.AppImage"
+             else:
+                 latest_filename = original_name  # fallback to original name
             
             latest_key = f"latest/{latest_filename}"
             
